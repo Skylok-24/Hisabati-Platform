@@ -1,0 +1,55 @@
+@startuml
+left to right direction
+
+' Actors definition
+actor "Guest" as guest
+actor "Seller" as user
+actor "Admin" as admin
+
+' System Boundary
+package "Social Media Account Marketplace (Broker)" {
+
+  ' Guest Use Cases
+  usecase "Login" as UC1
+  usecase "Sign Up (Register)" as UC2
+  usecase "Browse Announcements" as UC3
+  usecase "View Announcement Details" as UC4
+  usecase "Contact via WhatsApp/Telegram" as UC_Contact
+
+  ' Registered User Use Cases
+  usecase "Create Announcement" as UC5
+  usecase "View/Edit Profile" as UC6
+  usecase "Delete Own Announcement" as UC7
+  usecase "Edit Own Announcement" as UC8
+  usecase "Logout" as UC12
+
+  ' Admin Use Cases
+  usecase "Manage Users" as UC9
+  usecase "Manage Announcements" as UC10
+  usecase "Manage Categories" as UC11
+}
+
+' Guest connections
+guest --> UC1
+guest --> UC2
+guest --> UC3
+guest --> UC4
+guest --> UC_Contact
+
+' User connections (Inherits from Guest automatically)
+user --> UC5
+user --> UC6
+user --> UC7
+user --> UC8
+user --> UC12
+
+' Admin connections (Inherits from User automatically)
+admin --> UC9
+admin --> UC10
+admin --> UC11
+
+' Inheritance Relationships
+user --|> guest
+admin --|> user
+
+@enduml

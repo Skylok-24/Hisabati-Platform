@@ -1,0 +1,64 @@
+@startuml
+left to right direction
+skinparam classAttributeIconSize 0
+
+class User {
+  - full_name : String
+  - email : String
+  - password : String
+  - role : enum<seller,admin>
+}
+
+class Seller {
+  - description : String
+  - whatsapp : String
+  - telegram : String
+  - country : String
+}
+
+class Admin {
+}
+
+' علاقة الوراثة
+Seller --|> User
+Admin --|> User
+
+class Announcement {
+  - title : String
+  - description : String
+  - price : float
+  - followers : int
+  - account_age : int
+  - status : enum<active, sold, inactive>
+  - created_at : timestamp
+}
+
+class Category {
+  - name : String
+}
+
+class SystemConfig {
+  - id : int
+  - ad_script_header : Text
+  - ad_script_sidebar : Text
+  - ad_script_footer : Text
+  - is_ads_enabled : Boolean
+}
+
+Admin "1" ..> "1" SystemConfig : manages >
+
+note right of SystemConfig
+  يستخدم هذا الجدول لتخزين أكواد
+  Google AdSense
+  ليتمكن الأدمن من تحديثها
+  دون الرجوع للمبرمج
+end note
+
+' العلاقات (Relationships)
+' تصنيف واحد يضم عدة إعلانات
+Category "1" --o "0..*" Announcement : belongs to <
+
+' بائع واحد يملك عدة إعلانات
+User "1" -- "0..*" Announcement : creates >
+
+@enduml
