@@ -6,29 +6,27 @@ class User {
   - full_name : String
   - email : String
   - password : String
-  - role : enum<seller,admin>
+  - role : enum<seller, admin>
+}
+
+class Country {
+  - name : String
+  - currency_code : String
+  - currency_name : String
 }
 
 class Seller {
   - description : String
   - whatsapp : String
   - telegram : String
-  - country : String
 }
-
-class Admin {
-}
-
-' علاقة الوراثة
-Seller --|> User
-Admin --|> User
 
 class Announcement {
   - title : String
   - description : String
-  - price : float
+  - price : decimal
   - followers : int
-  - account_age : int
+  - account_created_at : date
   - status : enum<active, sold, inactive>
   - created_at : timestamp
 }
@@ -38,27 +36,30 @@ class Category {
 }
 
 class SystemConfig {
-  - id : int
   - ad_script_header : Text
   - ad_script_sidebar : Text
   - ad_script_footer : Text
   - is_ads_enabled : Boolean
 }
 
-Admin "1" ..> "1" SystemConfig : manages >
+' العلاقات
 
-note right of SystemConfig
-  يستخدم هذا الجدول لتخزين أكواد
-  Google AdSense
-  ليتمكن الأدمن من تحديثها
-  دون الرجوع للمبرمج
-end note
+' كل Seller مرتبط بمستخدم واحد
+User "1" <|-- "1" Seller : profile >
 
-' العلاقات (Relationships)
-' تصنيف واحد يضم عدة إعلانات
-Category "1" --o "0..*" Announcement : belongs to <
+' كل Seller ينتمي لدولة واحدة
+Country "1" -- "0..*" Seller : belongs to >
 
 ' بائع واحد يملك عدة إعلانات
-User "1" -- "0..*" Announcement : creates >
+Seller "1" -- "0..*" Announcement : creates >
+
+' تصنيف واحد يضم عدة إعلانات
+Category "1" -- "0..*" Announcement : contains >
+
+note right of SystemConfig
+  يحتوي إعدادات عامة للنظام
+  مثل أكواد Google AdSense
+  يتم تعديلها من لوحة تحكم الأدمن
+end note
 
 @enduml
