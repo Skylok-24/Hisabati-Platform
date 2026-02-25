@@ -30,7 +30,7 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DEBUG") == "True"
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["*"]
 
 
 # Application definition
@@ -80,13 +80,13 @@ WSGI_APPLICATION = 'trusthandle.wsgi.application'
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("DB_NAME"),
-        "USER": os.getenv("DB_USER"),
-        "PASSWORD": os.getenv("DB_PASSWORD"),
-        "HOST": os.getenv("DB_HOST"),
-        "PORT": os.getenv("DB_PORT"),
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'trusthandel',
+        'USER': 'lokman',
+        'PASSWORD': '1234',
+        'HOST': 'db',  # 👈 مهم
+        'PORT': 5432,
     }
 }
 
@@ -137,7 +137,12 @@ REST_FRAMEWORK = {
     'PAGE_SIZE': 10,
 }
 
-REDIS_CLIENT = redis.from_url(os.getenv("REDIS_URL"), decode_responses=True)
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+REDIS_CLIENT = redis.from_url(
+    REDIS_URL,
+    decode_responses=True
+)
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'

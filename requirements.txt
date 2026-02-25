@@ -1,7 +1,7 @@
 asgiref==3.11.1
 certifi==2026.1.4
 charset-normalizer==3.4.4
-Django==6.0.2
+Django==5.2.11
 django-stubs==5.2.9
 django-stubs-ext==5.2.9
 djangorestframework==3.16.1
@@ -18,3 +18,6 @@ sqlparse==0.5.5
 types-PyYAML==6.0.12.20250915
 typing_extensions==4.15.0
 urllib3==2.6.3
+python-dotenv==1.0.1
+google-auth==2.29.0
+google-auth-oauthlib==1.2.0
