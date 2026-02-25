@@ -1,23 +1,47 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 from decimal import Decimal, ROUND_HALF_UP
+from django.contrib.auth.models import BaseUserManager
 
 # Create your models here.
 
-class User(AbstractUser) :
+class CustomUserManager(BaseUserManager):
+    def create_user(self, email, password=None, **extra_fields):
+        if not email:
+            raise ValueError("Email is required")
+
+        email = self.normalize_email(email)
+        user = self.model(email=email, **extra_fields)
+        user.set_password(password)
+        user.save(using=self._db)
+        return user
+
+    def create_superuser(self, email, password=None, **extra_fields):
+        extra_fields.setdefault('is_staff', True)
+        extra_fields.setdefault('is_superuser', True)
+
+        return self.create_user(email, password, **extra_fields)
+
+class User(AbstractUser):
     username = None
     first_name = None
     last_name = None
+
     email = models.EmailField(unique=True)
+
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
 
+    objects = CustomUserManager()   # 🔥 هذا السطر المهم
+
     ROLE_CHOICES = (
-    ('seller','Seller'),
-    ('admin','Admin')
+        ('seller','Seller'),
+        ('admin','Admin')
     )
+
     role = models.CharField(max_length=20,choices=ROLE_CHOICES,default='seller')
     full_name = models.CharField(max_length=30)
+    is_verified = models.BooleanField(default=False)
 
     def __str__(self):
         return self.email
@@ -34,18 +58,22 @@ class Country(models.Model):
 class Seller(models.Model) :
     user = models.OneToOneField(User,on_delete=models.CASCADE)
     country = models.ForeignKey(Country, on_delete=models.PROTECT)
-    description = models.TextField()
+    description = models.TextField(blank=True,null=True)
     whatsapp = models.CharField(max_length=20,unique=True)
-    telegrame = models.CharField(max_length=20,unique=True)
 
 class SystemConfig(models.Model) :
-    ad_script_header = models.TextField(blank=True)
-    ad_script_sidebar = models.TextField(blank=True)
-    ad_script_footer = models.TextField(blank=True)
+    ad_script_header = models.TextField(blank=True,null=True)
+    ad_script_sidebar = models.TextField(blank=True,null=True)
+    ad_script_footer = models.TextField(blank=True,null=True)
     is_ads_enabled = models.BooleanField(default=False)
 
+    def save(self, *args, **kwargs):
+        if not self.pk and SystemConfig.objects.exists():
+            raise ValueError("Only one SystemConfig instance allowed")
+        return super().save(*args, **kwargs)
+
 class Category(models.Model) :
-    name = models.CharField(max_length=20)
+    name = models.CharField(max_length=20, unique=True)
 
     def __str__(self):
         return self.name
@@ -54,7 +82,7 @@ class Announcement(models.Model) :
     seller = models.ForeignKey(Seller, on_delete=models.CASCADE)
     category = models.ForeignKey(Category,on_delete=models.PROTECT)
     title = models.CharField(max_length=50)
-    description = models.TextField()
+    description = models.TextField(blank=True,null=True)
     price_original = models.DecimalField(max_digits=10, decimal_places=2)
     price_usd = models.DecimalField(max_digits=12,decimal_places=2)
     followers = models.PositiveIntegerField()

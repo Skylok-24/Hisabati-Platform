@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 from pathlib import Path
+import redis
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -77,10 +78,10 @@ WSGI_APPLICATION = 'trusthandle.wsgi.application'
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": "trusthundle",
+        "NAME": "trusthandel",
         "USER": "lokman",
         "PASSWORD": "1234",
-        "HOST": "localhost",
+        "HOST": "127.0.0.1",
         "PORT": "5432",
     }
 }
@@ -129,3 +130,10 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
 }
+
+REDIS_CLIENT = redis.StrictRedis(
+    host='127.0.0.1',
+    port=6379,
+    db=0,
+    decode_responses=True
+)

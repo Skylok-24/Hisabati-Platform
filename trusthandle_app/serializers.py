@@ -16,21 +16,15 @@ class RegisterSerializer(serializers.ModelSerializer) :
             'password': {'write_only': True, 'min_length': 8}
         }
 
-    def validate(self, data) :
-        if data['password'] == data['confirm_password'] :
-            return data
-        else:
+    def validate(self, data):
+        if data['password'] != data['confirm_password']:
             raise ValidationError({'password': 'Passwords do not match'})
+        return data
 
     def validate_email(self,value):
         if User.objects.filter(email=value).exists() :
             raise ValidationError("Email Already Exist")
         return value
-
-    def create(self, validated_data):
-        validated_data.pop('confirm_password')
-        user = User.objects.create_user(**validated_data) # extract dict to arguments
-        return user
 
 # class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 #     @classmethod
