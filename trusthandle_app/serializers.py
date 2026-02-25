@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.exceptions import ValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth import  authenticate
-from trusthandle_app.models import Announcement
+from trusthandle_app.models import Announcement , Seller , Country
 
 User = get_user_model()
 
@@ -57,11 +57,32 @@ class LoginSerializer(serializers.Serializer):
 class GoogleLoginSerializer(serializers.Serializer) :
     id_token = serializers.CharField()
 
-class AnnouncementSerializer(serializers.ModelSerializer):
 
-    seller_email = serializers.CharField(source="seller.user.email", read_only=True)
-    country = serializers.CharField(source="seller.country.name", read_only=True)
-    currency = serializers.CharField(source="seller.country.currency_code", read_only=True)
+class CountrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Country
+        fields = [
+            "name",
+            "currency_code",
+            "currency_name",
+            "rate_to_usd",
+        ]
+
+class SellerSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(source="user.email", read_only=True)
+    country = CountrySerializer(read_only=True)
+
+    class Meta:
+        model = Seller
+        fields = [
+            "email",
+            "description",
+            "whatsapp",
+            "country",
+        ]
+
+class AnnouncementSerializer(serializers.ModelSerializer):
+    seller = SellerSerializer(read_only=True)
     category = serializers.CharField(source="category.name", read_only=True)
 
     class Meta:
@@ -78,7 +99,5 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             "created_at",
             "account_link",
             "category",
-            "seller_email",
-            "country",
-            "currency",
+            "seller",
         ]

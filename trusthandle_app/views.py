@@ -15,6 +15,47 @@ from google.auth.transport import requests as google_requests
 import requests
 from trusthandle_app.models import Announcement, Country
 from trusthandle_app.serializers import AnnouncementSerializer
+from rest_framework.generics import ListAPIView
+from rest_framework.permissions import IsAuthenticated , AllowAny
+from .pagination import TenPerPagePagination
+
+ISO_TO_CURRENCY = {
+    # شمال إفريقيا
+    "DZ": "DZD",
+    "MA": "MAD",
+    "TN": "TND",
+    "LY": "LYD",
+    "EG": "EGP",
+    "SD": "SDG",
+    "MR": "MRU",
+
+    # الخليج
+    "SA": "SAR",
+    "AE": "AED",
+    "QA": "QAR",
+    "KW": "KWD",
+    "BH": "BHD",
+    "OM": "OMR",
+
+    # بلاد الشام
+    "JO": "JOD",
+    "LB": "LBP",
+    "SY": "SYP",
+    "PS": "ILS",
+
+    # العراق واليمن
+    "IQ": "IQD",
+    "YE": "YER",
+
+    # جزر القمر وجيبوتي
+    "KM": "KMF",
+    "DJ": "DJF",
+
+    # الصومال
+    "SO": "SOS",
+}
+
+
 
 User = get_user_model()
 
@@ -27,79 +68,94 @@ def get_client_ip(request):
         ip = request.META.get("REMOTE_ADDR")
     return ip
 
-@api_view(["GET"])
-def index(request) :
-    ip = get_client_ip(request)
 
-    # أثناء التطوير على localhost
-    if ip == "127.0.0.1":
-        ip = "197.205.0.1"  # IP جزائري للتجربة
+class CountryAnnouncementsView(ListAPIView):
+    serializer_class = AnnouncementSerializer
+    pagination_class = TenPerPagePagination
+    permission_classes = [AllowAny]  # أو IsAuthenticated لو أردتها للمسجلين فقط
 
-    try:
-        res = requests.get(f"https://ipapi.co/{ip}/country/")
-        country_iso = res.text.strip()
-    except:
-        return Response({"error": "Cannot detect country"}, status=400)
+    def get_queryset(self):
+        ip = get_client_ip(self.request)
 
-    iso_to_currency = {
-        # شمال إفريقيا
-        "DZ": "DZD",  # Algeria
-        "MA": "MAD",  # Morocco
-        "TN": "TND",  # Tunisia
-        "LY": "LYD",  # Libya
-        "EG": "EGP",  # Egypt
-        "SD": "SDG",  # Sudan
-        "MR": "MRU",  # Mauritania
+        # أثناء التطوير
+        if ip == "127.0.0.1":
+            ip = "197.205.0.1"
 
-        # الخليج
-        "SA": "SAR",  # Saudi Arabia
-        "AE": "AED",  # UAE
-        "QA": "QAR",  # Qatar
-        "KW": "KWD",  # Kuwait
-        "BH": "BHD",  # Bahrain
-        "OM": "OMR",  # Oman
+        redis_client = settings.REDIS_CLIENT
+        cache_key = f"geo_ip_{ip}"
 
-        # بلاد الشام
-        "JO": "JOD",  # Jordan
-        "LB": "LBP",  # Lebanon
-        "SY": "SYP",  # Syria
-        "PS": "ILS",  # Palestine (تتعامل غالباً بالشيكل)
+        # 🔥 تحقق من الكاش أولاً
+        country_iso = redis_client.get(cache_key)
+        # country_iso = 'DZ'
 
-        # العراق واليمن
-        "IQ": "IQD",  # Iraq
-        "YE": "YER",  # Yemen
+        # if country_iso:
+        #     if isinstance(country_iso, bytes):
+        #         country_iso = country_iso.decode("utf-8")
 
-        # جزر القمر وجيبوتي
-        "KM": "KMF",  # Comoros
-        "DJ": "DJF",  # Djibouti
+        if not country_iso:
+            try:
+                res = requests.get(
+                    f"https://ipapi.co/{ip}/country/",
+                    timeout=5
+                )
+                country_iso = res.text.strip().upper()
 
-        # الصومال
-        "SO": "SOS",  # Somalia
-    }
+                # نخزن النتيجة لمدة ساعة
+                redis_client.setex(cache_key, 3600, country_iso)
 
-    currency_code = iso_to_currency.get(country_iso)
+            except:
+                # fallback: عرض كل الإعلانات
+                return (
+                    Announcement.objects
+                    .filter(status="active")
+                    .select_related(
+                        "seller__user",
+                        "seller__country",
+                        "category"
+                    )
+                    .order_by("-created_at")
+                )
 
-    if not currency_code:
-        return Response({"error": "Country not supported"}, status=404)
+        currency_code = ISO_TO_CURRENCY.get(country_iso)
 
-    try:
-        country = Country.objects.get(currency_code=currency_code)
-    except Country.DoesNotExist:
-        return Response({"error": f"Country not found in database {country_iso}"}, status=404)
+        if not currency_code:
+            # fallback إذا البلد غير مدعوم
+            return (
+                Announcement.objects
+                .filter(status="active")
+                .select_related(
+                    "seller__user",
+                    "seller__country",
+                    "category"
+                )
+                .order_by("-created_at")
+            )
 
-    announcements = Announcement.objects.filter(
-        seller__country=country,
-        status="active"
-    ).order_by("-created_at")
+        try:
+            country = Country.objects.get(currency_code=currency_code)
+        except Country.DoesNotExist:
+            # fallback إذا الدولة غير موجودة في DB
+            return (
+                Announcement.objects
+                .filter(status="active")
+                .select_related(
+                    "seller__user",
+                    "seller__country",
+                    "category"
+                )
+                .order_by("-created_at")
+            )
 
-    serializer = AnnouncementSerializer(announcements, many=True)
-
-    return Response({
-        "country": country.name,
-        "currency": country.currency_code,
-        "count": announcements.count(),
-        "data": serializer.data
-    })
+        return (
+            Announcement.objects
+            .filter(status="active", seller__country=country)
+            .select_related(
+                "seller__user",
+                "seller__country",
+                "category"
+            )
+            .order_by("-created_at")
+        )
 
 
 @api_view(['POST'])
@@ -117,6 +173,7 @@ def login_view(request) :
             "access_token": str(refresh.access_token)
             }, status=status.HTTP_200_OK)
         return Response(serializer.errors,status=status.HTTP_401_UNAUTHORIZED)
+
 
 @api_view(['POST'])
 def register(request):
@@ -241,6 +298,9 @@ def google_login(request):
     if not email or not email_verified:
         return Response({"detail": "Email not verified"}, status=400)
 
+    if idinfo["iss"] not in ["accounts.google.com", "https://accounts.google.com"]:
+        return Response({"detail": "Wrong issuer"}, status=400)
+
     user, created = User.objects.get_or_create(
         email=email,
         defaults={"full_name": name}
@@ -252,9 +312,6 @@ def google_login(request):
 
     if not user.is_active:
         return Response({"detail": "Account disabled"}, status=403)
-
-    if idinfo["iss"] not in ["accounts.google.com", "https://accounts.google.com"]:
-        return Response({"detail": "Wrong issuer"}, status=400)
 
     refresh = RefreshToken.for_user(user)
 
@@ -268,8 +325,13 @@ def google_login(request):
 
 
 
+class LatestAnnouncementsView(ListAPIView):
+    serializer_class = AnnouncementSerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = TenPerPagePagination
 
-
-
-
+    def get_queryset(self):
+        return Announcement.objects.filter(
+            status="active"
+        ).order_by("-created_at")
 
