@@ -3,7 +3,6 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import RegisterSerializer , LoginSerializer
-import requests
 from trusthandle_app.serializers import GoogleLoginSerializer
 from django.contrib.auth import get_user_model
 import random
@@ -11,14 +10,97 @@ import json
 import hashlib
 from django.conf import settings
 from django.core.mail import send_mail
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+import requests
+from trusthandle_app.models import Announcement, Country
+from trusthandle_app.serializers import AnnouncementSerializer
 
 User = get_user_model()
 
 
+def get_client_ip(request):
+    x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+    if x_forwarded_for:
+        ip = x_forwarded_for.split(",")[0]
+    else:
+        ip = request.META.get("REMOTE_ADDR")
+    return ip
+
+@api_view(["GET"])
 def index(request) :
+    ip = get_client_ip(request)
+
+    # أثناء التطوير على localhost
+    if ip == "127.0.0.1":
+        ip = "197.205.0.1"  # IP جزائري للتجربة
+
+    try:
+        res = requests.get(f"https://ipapi.co/{ip}/country/")
+        country_iso = res.text.strip()
+    except:
+        return Response({"error": "Cannot detect country"}, status=400)
+
+    iso_to_currency = {
+        # شمال إفريقيا
+        "DZ": "DZD",  # Algeria
+        "MA": "MAD",  # Morocco
+        "TN": "TND",  # Tunisia
+        "LY": "LYD",  # Libya
+        "EG": "EGP",  # Egypt
+        "SD": "SDG",  # Sudan
+        "MR": "MRU",  # Mauritania
+
+        # الخليج
+        "SA": "SAR",  # Saudi Arabia
+        "AE": "AED",  # UAE
+        "QA": "QAR",  # Qatar
+        "KW": "KWD",  # Kuwait
+        "BH": "BHD",  # Bahrain
+        "OM": "OMR",  # Oman
+
+        # بلاد الشام
+        "JO": "JOD",  # Jordan
+        "LB": "LBP",  # Lebanon
+        "SY": "SYP",  # Syria
+        "PS": "ILS",  # Palestine (تتعامل غالباً بالشيكل)
+
+        # العراق واليمن
+        "IQ": "IQD",  # Iraq
+        "YE": "YER",  # Yemen
+
+        # جزر القمر وجيبوتي
+        "KM": "KMF",  # Comoros
+        "DJ": "DJF",  # Djibouti
+
+        # الصومال
+        "SO": "SOS",  # Somalia
+    }
+
+    currency_code = iso_to_currency.get(country_iso)
+
+    if not currency_code:
+        return Response({"error": "Country not supported"}, status=404)
+
+    try:
+        country = Country.objects.get(currency_code=currency_code)
+    except Country.DoesNotExist:
+        return Response({"error": f"Country not found in database {country_iso}"}, status=404)
+
+    announcements = Announcement.objects.filter(
+        seller__country=country,
+        status="active"
+    ).order_by("-created_at")
+
+    serializer = AnnouncementSerializer(announcements, many=True)
+
     return Response({
-        "message" : "index page"
-    },status=status.HTTP_200_OK)
+        "country": country.name,
+        "currency": country.currency_code,
+        "count": announcements.count(),
+        "data": serializer.data
+    })
+
 
 @api_view(['POST'])
 def login_view(request) :
@@ -44,6 +126,11 @@ def register(request):
 
         data = serializer.validated_data
         email = data['email']
+        if User.objects.filter(email=email).exists():
+            return Response(
+                {"error": "Email already registered"},
+                status=400
+            )
 
         otp_code = str(random.randint(100000, 999999))
         hashed_otp = hashlib.sha256(otp_code.encode()).hexdigest()
@@ -67,7 +154,7 @@ def register(request):
         send_mail(
             subject="رمز التحقق",
             message=f"رمز التحقق هو: {otp_code}",
-            from_email="your_email@gmail.com",
+            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[email],
         )
 
@@ -130,44 +217,29 @@ def verify_otp(request):
 
 
 @api_view(['POST'])
-def google_login(request) :
+def google_login(request):
     serializer = GoogleLoginSerializer(data=request.data)
 
-    if not serializer.is_valid() :
-        return Response(serializer.errors,status=status.HTTP_400_BAD_REQUEST)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=400)
 
-    access_token = serializer.validated_data['access_token']
+    token = serializer.validated_data["id_token"]
 
-    google_url = "https://www.googleapis.com/oauth2/v3/userinfo"
-
-    response = requests.get(
-        google_url,
-        headers={"Authorization": f"Bearer {access_token}"},
-        timeout=10
-    )
-
-    if response.status_code != 200:
-        return Response(
-            {"detail": "Invalid Google token"},
-            status=status.HTTP_400_BAD_REQUEST
+    try:
+        idinfo = id_token.verify_oauth2_token(
+            token,
+            google_requests.Request(),
+            settings.GOOGLE_CLIENT_ID  # ضع Client ID هنا
         )
+    except ValueError:
+        return Response({"detail": "Invalid Google token"}, status=400)
 
-    data = response.json()
+    email = idinfo.get("email")
+    name = idinfo.get("name")
+    email_verified = idinfo.get("email_verified")
 
-    email = data.get("email")
-    if not email:
-        return Response(
-            {"detail": "Google account has no email"},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    name = data.get("name")
-    email_verified = data.get("email_verified")
-
-    if not email_verified:
-        return Response(
-            {"detail": "Email not verified by Google"},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+    if not email or not email_verified:
+        return Response({"detail": "Email not verified"}, status=400)
 
     user, created = User.objects.get_or_create(
         email=email,
@@ -179,10 +251,10 @@ def google_login(request) :
         user.save()
 
     if not user.is_active:
-        return Response(
-            {"detail": "Account disabled"},
-            status=status.HTTP_403_FORBIDDEN
-        )
+        return Response({"detail": "Account disabled"}, status=403)
+
+    if idinfo["iss"] not in ["accounts.google.com", "https://accounts.google.com"]:
+        return Response({"detail": "Wrong issuer"}, status=400)
 
     refresh = RefreshToken.for_user(user)
 
@@ -192,5 +264,12 @@ def google_login(request) :
         "role": user.role,
         "refresh_token": str(refresh),
         "access_token": str(refresh.access_token)
-    }, status=status.HTTP_200_OK)
+    })
+
+
+
+
+
+
+
 
