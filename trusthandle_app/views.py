@@ -2,7 +2,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework_simplejwt.tokens import RefreshToken
-from .serializers import RegisterSerializer , LoginSerializer, AnnouncementUpdateSerializer
+from .serializers import RegisterSerializer , LoginSerializer, AnnouncementUpdateSerializer, AnnouncementCreateSerializer
 from trusthandle_app.serializers import GoogleLoginSerializer
 from django.contrib.auth import get_user_model
 import random
@@ -15,8 +15,9 @@ from google.auth.transport import requests as google_requests
 import requests
 from trusthandle_app.models import Announcement, Country, Seller
 from trusthandle_app.serializers import AnnouncementSerializer
-from rest_framework.generics import ListAPIView, RetrieveUpdateDestroyAPIView, ListCreateAPIView
+from rest_framework.generics import ListAPIView, RetrieveAPIView, RetrieveUpdateDestroyAPIView, ListCreateAPIView
 from rest_framework.permissions import IsAuthenticated , AllowAny, BasePermission
+from rest_framework.exceptions import ValidationError
 from .pagination import TenPerPagePagination
 
 ISO_TO_CURRENCY = {
@@ -354,7 +355,7 @@ class LatestAnnouncementsView(ListAPIView):
         ).order_by("-created_at")
 
 
-class SellerAnnouncementsListView(ListAPIView):
+class SellerAnnouncementsListView(ListCreateAPIView):
     """
     List all announcements created by the authenticated seller.
     GET /api/seller/announcements/
@@ -362,6 +363,11 @@ class SellerAnnouncementsListView(ListAPIView):
     serializer_class = AnnouncementSerializer
     permission_classes = [IsAuthenticated]
     pagination_class = TenPerPagePagination
+
+    def get_serializer_class(self):
+        if self.request.method == 'POST':
+            return AnnouncementCreateSerializer
+        return AnnouncementSerializer
 
     def get_queryset(self):
         user = self.request.user
@@ -377,60 +383,33 @@ class SellerAnnouncementsListView(ListAPIView):
         except Seller.DoesNotExist:
             return Announcement.objects.none()
 
+    def perform_create(self, serializer):
+        user = self.request.user
+        try:
+            seller = Seller.objects.get(user=user)
+        except Seller.DoesNotExist:
+            raise ValidationError({"detail": "Seller profile not found"})
 
-class AnnouncementDetailView(RetrieveUpdateDestroyAPIView):
-    """
-    Retrieve, update, or delete an announcement.
-    - GET /api/announcements/{id}/ - Retrieve announcement details
-    - PATCH /api/announcements/{id}/ - Update announcement
-    - DELETE /api/announcements/{id}/ - Delete announcement
-    
-    Only the seller who created the announcement can update or delete it.
-    """
-    queryset = Announcement.objects.all()
-    lookup_field = 'id'
+        serializer.save(seller=seller)
 
-    def get_serializer_class(self):
-        """Use different serializers for different methods"""
-        if self.request.method in ['PATCH', 'PUT']:
-            return AnnouncementUpdateSerializer
-        return AnnouncementSerializer
-
-    def get_permissions(self):
-        """
-        Override permissions based on request method.
-        - GET: Allow any authenticated user
-        - PATCH/DELETE: Only the seller who owns the announcement
-        """
-        if self.request.method == 'GET':
-            permission_classes = [IsAuthenticated]
-        else:
-            permission_classes = [IsAuthenticated, IsSellerOwner]
-        
-        return [permission() for permission in permission_classes]
-
-    def perform_update(self, serializer):
-        """Save updated announcement"""
-        serializer.save()
-
-    def perform_destroy(self, instance):
-        """Delete announcement"""
-        instance.delete()
-
-    def update(self, request, *args, **kwargs):
-        response = super().update(request, *args, **kwargs)
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
         response.data = {
-            "message": "Announcement updated successfully",
+            "message": "Announcement created successfully",
             "data": response.data,
         }
         return response
 
-    def destroy(self, request, *args, **kwargs):
-        super().destroy(request, *args, **kwargs)
-        return Response(
-            {"message": "Announcement deleted successfully"},
-            status=status.HTTP_200_OK,
-        )
+
+class AnnouncementDetailView(RetrieveAPIView):
+    """
+    Retrieve announcement details.
+    - GET /api/announcements/{id}/ - Retrieve announcement details
+    """
+    queryset = Announcement.objects.all()
+    lookup_field = 'id'
+    serializer_class = AnnouncementSerializer
+    permission_classes = [AllowAny]
 
 
 class SellerAnnouncementManageView(RetrieveUpdateDestroyAPIView):

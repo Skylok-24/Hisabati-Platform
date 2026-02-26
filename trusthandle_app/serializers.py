@@ -157,3 +157,45 @@ class AnnouncementUpdateSerializer(serializers.ModelSerializer):
         
         instance.save()
         return instance
+
+
+class AnnouncementCreateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for creating announcements by sellers.
+    """
+    category_id = serializers.IntegerField(write_only=True)
+
+    class Meta:
+        model = Announcement
+        fields = [
+            "title",
+            "description",
+            "price_original",
+            "followers",
+            "account_created_at",
+            "status",
+            "account_link",
+            "category_id",
+        ]
+
+    def validate_status(self, value):
+        valid_statuses = ['active', 'sold', 'inactive']
+        if value not in valid_statuses:
+            raise ValidationError(f"Status must be one of {valid_statuses}")
+        return value
+
+    def validate_price_original(self, value):
+        if value <= 0:
+            raise ValidationError("Price must be greater than 0")
+        return value
+
+    def create(self, validated_data):
+        category_id = validated_data.pop('category_id')
+        try:
+            from trusthandle_app.models import Category
+            category = Category.objects.get(id=category_id)
+        except Category.DoesNotExist:
+            raise ValidationError({"category_id": "Category not found"})
+
+        validated_data['category'] = category
+        return Announcement.objects.create(**validated_data)
