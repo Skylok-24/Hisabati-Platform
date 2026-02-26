@@ -29,8 +29,8 @@ services:
       - .:/app:Z
     ports:
       - "8000:8000"
-    environment:
-      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
     depends_on:
       - db
       - redis
