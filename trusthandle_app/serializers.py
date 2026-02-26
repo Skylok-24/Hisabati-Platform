@@ -101,3 +101,59 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             "category",
             "seller",
         ]
+
+
+class AnnouncementUpdateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for updating announcements by sellers.
+    Allows modification of specific fields only.
+    """
+    category_id = serializers.IntegerField(write_only=True, required=False)
+    
+    class Meta:
+        model = Announcement
+        fields = [
+            "id",
+            "title",
+            "description",
+            "price_original",
+            "followers",
+            "account_created_at",
+            "status",
+            "account_link",
+            "category_id",
+        ]
+        read_only_fields = ["id", "created_at", "price_usd"]
+
+    def validate_status(self, value):
+        """Validate that status is one of the allowed choices"""
+        valid_statuses = ['active', 'sold', 'inactive']
+        if value not in valid_statuses:
+            raise ValidationError(f"Status must be one of {valid_statuses}")
+        return value
+
+    def validate_price_original(self, value):
+        """Validate that price is positive"""
+        if value <= 0:
+            raise ValidationError("Price must be greater than 0")
+        return value
+
+    def update(self, instance, validated_data):
+        """Update announcement with new data"""
+        # Handle category_id separately since it's a nested field
+        category_id = validated_data.pop('category_id', None)
+        
+        if category_id:
+            try:
+                from trusthandle_app.models import Category
+                category = Category.objects.get(id=category_id)
+                instance.category = category
+            except Category.DoesNotExist:
+                raise ValidationError({"category_id": "Category not found"})
+        
+        # Update other fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        instance.save()
+        return instance

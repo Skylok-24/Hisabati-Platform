@@ -2,7 +2,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework_simplejwt.tokens import RefreshToken
-from .serializers import RegisterSerializer , LoginSerializer
+from .serializers import RegisterSerializer , LoginSerializer, AnnouncementUpdateSerializer
 from trusthandle_app.serializers import GoogleLoginSerializer
 from django.contrib.auth import get_user_model
 import random
@@ -13,10 +13,10 @@ from django.core.mail import send_mail
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 import requests
-from trusthandle_app.models import Announcement, Country
+from trusthandle_app.models import Announcement, Country, Seller
 from trusthandle_app.serializers import AnnouncementSerializer
-from rest_framework.generics import ListAPIView
-from rest_framework.permissions import IsAuthenticated , AllowAny
+from rest_framework.generics import ListAPIView, RetrieveUpdateDestroyAPIView, ListCreateAPIView
+from rest_framework.permissions import IsAuthenticated , AllowAny, BasePermission
 from .pagination import TenPerPagePagination
 
 ISO_TO_CURRENCY = {
@@ -60,6 +60,27 @@ ISO_TO_CURRENCY = {
 User = get_user_model()
 
 
+# Custom Permission to check if user is the seller who owns the announcement
+class IsSellerOwner(BasePermission):
+    """
+    Custom permission to only allow sellers to edit or delete their own announcements.
+    """
+    
+    def has_object_permission(self, request, view, obj):
+        # Check if user is authenticated and is a seller
+        if not request.user or not request.user.is_authenticated:
+            return False
+        
+        # Check if user has a seller profile
+        try:
+            seller = Seller.objects.get(user=request.user)
+        except Seller.DoesNotExist:
+            return False
+        
+        # Check if the announcement belongs to this seller
+        return obj.seller == seller
+
+
 def get_client_ip(request):
     x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
     if x_forwarded_for:
@@ -78,19 +99,16 @@ class CountryAnnouncementsView(ListAPIView):
         ip = get_client_ip(self.request)
 
         # أثناء التطوير
-        if ip == "127.0.0.1":
+        if ip.startswith("10.") or ip == "127.0.0.1":
             ip = "197.205.0.1"
 
         redis_client = settings.REDIS_CLIENT
         cache_key = f"geo_ip_{ip}"
+        country_iso =redis_client.get(cache_key)
 
-        # 🔥 تحقق من الكاش أولاً
-        country_iso = redis_client.get(cache_key)
-        # country_iso = 'DZ'
+        if country_iso and isinstance(country_iso, bytes):
+            country_iso = country_iso.decode("utf-8")
 
-        # if country_iso:
-        #     if isinstance(country_iso, bytes):
-        #         country_iso = country_iso.decode("utf-8")
 
         if not country_iso:
             try:
@@ -334,4 +352,133 @@ class LatestAnnouncementsView(ListAPIView):
         return Announcement.objects.filter(
             status="active"
         ).order_by("-created_at")
+
+
+class SellerAnnouncementsListView(ListAPIView):
+    """
+    List all announcements created by the authenticated seller.
+    GET /api/seller/announcements/
+    """
+    serializer_class = AnnouncementSerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = TenPerPagePagination
+
+    def get_queryset(self):
+        user = self.request.user
+        try:
+            seller = Seller.objects.get(user=user)
+            return Announcement.objects.filter(
+                seller=seller
+            ).select_related(
+                "seller__user",
+                "seller__country",
+                "category"
+            ).order_by("-created_at")
+        except Seller.DoesNotExist:
+            return Announcement.objects.none()
+
+
+class AnnouncementDetailView(RetrieveUpdateDestroyAPIView):
+    """
+    Retrieve, update, or delete an announcement.
+    - GET /api/announcements/{id}/ - Retrieve announcement details
+    - PATCH /api/announcements/{id}/ - Update announcement
+    - DELETE /api/announcements/{id}/ - Delete announcement
+    
+    Only the seller who created the announcement can update or delete it.
+    """
+    queryset = Announcement.objects.all()
+    lookup_field = 'id'
+
+    def get_serializer_class(self):
+        """Use different serializers for different methods"""
+        if self.request.method in ['PATCH', 'PUT']:
+            return AnnouncementUpdateSerializer
+        return AnnouncementSerializer
+
+    def get_permissions(self):
+        """
+        Override permissions based on request method.
+        - GET: Allow any authenticated user
+        - PATCH/DELETE: Only the seller who owns the announcement
+        """
+        if self.request.method == 'GET':
+            permission_classes = [IsAuthenticated]
+        else:
+            permission_classes = [IsAuthenticated, IsSellerOwner]
+        
+        return [permission() for permission in permission_classes]
+
+    def perform_update(self, serializer):
+        """Save updated announcement"""
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        """Delete announcement"""
+        instance.delete()
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        response.data = {
+            "message": "Announcement updated successfully",
+            "data": response.data,
+        }
+        return response
+
+    def destroy(self, request, *args, **kwargs):
+        super().destroy(request, *args, **kwargs)
+        return Response(
+            {"message": "Announcement deleted successfully"},
+            status=status.HTTP_200_OK,
+        )
+
+
+class SellerAnnouncementManageView(RetrieveUpdateDestroyAPIView):
+    """
+    Manage seller's own announcements (restricted to seller who owns them).
+    - GET /api/seller/announcements/{id}/ - Retrieve own announcement
+    - PATCH /api/seller/announcements/{id}/ - Update own announcement
+    - DELETE /api/seller/announcements/{id}/ - Delete own announcement
+    
+    Only the authenticated seller can access their own announcements.
+    """
+    permission_classes = [IsAuthenticated, IsSellerOwner]
+    lookup_field = 'id'
+
+    def get_serializer_class(self):
+        """Use different serializers for different methods"""
+        if self.request.method in ['PATCH', 'PUT']:
+            return AnnouncementUpdateSerializer
+        return AnnouncementSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        try:
+            seller = Seller.objects.get(user=user)
+            return Announcement.objects.filter(seller=seller)
+        except Seller.DoesNotExist:
+            return Announcement.objects.none()
+
+    def perform_update(self, serializer):
+        """Save updated announcement"""
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        """Delete announcement"""
+        instance.delete()
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        response.data = {
+            "message": "Announcement updated successfully",
+            "data": response.data,
+        }
+        return response
+
+    def destroy(self, request, *args, **kwargs):
+        super().destroy(request, *args, **kwargs)
+        return Response(
+            {"message": "Announcement deleted successfully"},
+            status=status.HTTP_200_OK,
+        )
 
