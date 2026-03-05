@@ -3,6 +3,7 @@ from rest_framework import permissions
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
 from . import views
+from rest_framework_simplejwt.views import TokenRefreshView
 
 schema_view = get_schema_view(
    openapi.Info(
@@ -25,9 +26,14 @@ urlpatterns = [
     path('change-password/', views.change_password, name='change_password'),
     path('reset-password-request/', views.reset_password_request, name='reset_password_request'),
     path('reset-password-confirm/', views.reset_password_confirm, name='reset_password_confirm'),
+    path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('logout/', views.LogoutView.as_view(), name='logout'),
 
     # Public announcements
     path('', views.CountryAnnouncementsView.as_view()),
+    path('announcements/search/', views.AnnouncementSearchView.as_view(), name='announcement-search'),
+    path('announcements/filter/', views.AnnouncementFilterView.as_view(), name='announcement-filter'),
+    path('supported-countries/', views.CountryRateListView.as_view(), name='supported-countries-list'),
     path("announcements/<int:id>/", views.AnnouncementDetailView.as_view(), name='announcement-detail'),
 
     # Seller APIs

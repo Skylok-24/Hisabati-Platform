@@ -5,7 +5,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import (
     RegisterSerializer, LoginSerializer, AnnouncementUpdateSerializer, 
     AnnouncementCreateSerializer, SellerSerializer, ChangePasswordSerializer,
-    ResetPasswordRequestSerializer, ResetPasswordConfirmSerializer, ResendOTPSerializer
+    ResetPasswordRequestSerializer, ResetPasswordConfirmSerializer, ResendOTPSerializer,
+    CountryRateSerializer
 )
 from trusthandle_app.serializers import GoogleLoginSerializer
 from django.contrib.auth import get_user_model
@@ -16,7 +17,6 @@ from django.conf import settings
 from django.core.mail import send_mail
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
-import requests
 from trusthandle_app.models import Announcement, Country, Seller
 from trusthandle_app.serializers import AnnouncementSerializer
 from rest_framework.generics import ListAPIView, RetrieveAPIView, RetrieveUpdateDestroyAPIView, ListCreateAPIView
@@ -24,6 +24,9 @@ from rest_framework.permissions import IsAuthenticated , AllowAny, BasePermissio
 from rest_framework.decorators import api_view, permission_classes
 from .pagination import TenPerPagePagination
 from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.views import APIView
+from rest_framework.filters import SearchFilter
+from decimal import Decimal, InvalidOperation
 
 
 ISO_TO_CURRENCY = {
@@ -88,6 +91,37 @@ class IsSellerOwner(BasePermission):
         return obj.seller == seller
 
 
+class LogoutView(APIView):
+    # نضع الصلاحية لأنه لا يمكن لشخص غير مسجل الدخول أن يعمل تسجيل خروج
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            # نستقبل الـ refresh token من الـ Body الخاص بالطلب
+            refresh_token = request.data.get("refresh")
+
+            if not refresh_token:
+                return Response(
+                    {"error": "Refresh token is required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # نقوم بإنشاء كائن من التوكن ثم نضعه في القائمة السوداء
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+
+            return Response(
+                {"message": "You have successfully logged out."},
+                status=status.HTTP_205_RESET_CONTENT
+            )
+        except Exception as e:
+            # إذا كان التوكن غير صحيح أو انتهت صلاحيته بالفعل
+            return Response(
+                {"error": "The token is invalid or has already been logged out."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
 class CountryAnnouncementsView(ListAPIView):
     serializer_class = AnnouncementSerializer
     pagination_class = TenPerPagePagination
@@ -105,6 +139,153 @@ class CountryAnnouncementsView(ListAPIView):
             )
             .order_by("-created_at")
         )
+
+
+class AnnouncementSearchView(ListAPIView):
+    serializer_class = AnnouncementSerializer
+    pagination_class = TenPerPagePagination
+    permission_classes = [AllowAny]
+
+    # تفعيل فلتر البحث الخاص بـ DRF
+    filter_backends = [SearchFilter]
+    # تحديد الحقول التي سيتم البحث فيها (يمكنك إضافة الوصف أيضاً)
+    search_fields = ['title', 'description']
+
+    def get_queryset(self):
+        # هنا نُرجع فقط الـ QuerySet الأساسي، والـ SearchFilter سيتكفل بالباقي أوتوماتيكياً
+        return (
+            Announcement.objects
+            .filter(status="active")
+            .select_related(
+                "seller__user",
+                "seller__country",
+                "category"
+            )
+            .order_by("-created_at")
+        )
+
+
+class AnnouncementFilterView(ListAPIView):
+    """
+    API for filtering announcements based on multiple criteria:
+    - followers (range: min_followers, max_followers)
+    - price (range: min_price, max_price) - filtered on price_usd
+    - category (category_id)
+    - country (country_id)
+    """
+    serializer_class = AnnouncementSerializer
+    pagination_class = TenPerPagePagination
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        queryset = (
+            Announcement.objects
+            .filter(status="active")
+            .select_related(
+                "seller__user",
+                "seller__country",
+                "category"
+            )
+            .order_by("-created_at")
+        )
+
+        # Filter by Followers
+        min_followers = self.request.query_params.get('min_followers')
+        max_followers = self.request.query_params.get('max_followers')
+        if min_followers:
+            queryset = queryset.filter(followers__gte=min_followers)
+        if max_followers:
+            queryset = queryset.filter(followers__lte=max_followers)
+
+        # Filter by Price (using price_usd)
+        min_price = self.request.query_params.get('min_price')
+        max_price = self.request.query_params.get('max_price')
+        if min_price:
+            queryset = queryset.filter(price_usd__gte=min_price)
+        if max_price:
+            queryset = queryset.filter(price_usd__lte=max_price)
+
+        # Filter by Category
+        category_id = self.request.query_params.get('category_id')
+        if category_id:
+            queryset = queryset.filter(category_id=category_id)
+
+        # Filter by Country (seller's country)
+        country_id = self.request.query_params.get('country_id')
+        if country_id:
+            queryset = queryset.filter(seller__country_id=country_id)
+
+        return queryset
+
+
+CURRENCY_SYMBOLS = {
+    "DZD": "د.ج",
+    "MAD": "د.م",
+    "TND": "د.ت",
+    "LYD": "د.ل",
+    "EGP": "ج.م",
+    "SDG": "ج.س",
+    "MRU": "أ.ق",
+    "SAR": "ر.س",
+    "AED": "د.إ",
+    "QAR": "ر.ق",
+    "KWD": "د.ك",
+    "BHD": "د.ب",
+    "OMR": "ر.ع",
+    "JOD": "د.أ",
+    "LBP": "ل.ل",
+    "SYP": "ل.س",
+    "ILS": "ش.ج",
+    "IQD": "د.ع",
+    "YER": "ر.ي",
+    "KMF": "ف.ق",
+    "DJF": "ف.ج",
+    "SOS": "ش.ص",
+}
+
+
+class CountryRateListView(APIView):
+    """
+    API that returns the daily exchange rates in a formatted structure for the dashboard.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        countries = Country.objects.all().order_by('name')
+        rates_data = []
+
+        for country in countries:
+            symbol = CURRENCY_SYMBOLS.get(country.currency_code, country.currency_code)
+
+            try:
+                # نستخدم Decimal بدلاً من float لضمان دقة الحسابات المالية
+                rate = Decimal(str(country.rate_to_usd))
+
+                if rate > 0:
+                    local_value = Decimal('1.00') / rate
+                    # تنسيق الرقم: إضافة فواصل للآلاف وتقريبه لرقمين عشريين (مثال: 1,350.50)
+                    formatted_value = f"{local_value:,.2f}"
+                else:
+                    formatted_value = "0.00"
+
+            except (ZeroDivisionError, TypeError, InvalidOperation, ValueError):
+                formatted_value = "0.00"
+
+            rates_data.append({
+                "usd_amount": "1 USD",
+                "local_amount": f"{formatted_value} {symbol}",
+                "label": "سعر اليوم",
+                # كتابة الزوج بالطريقة المالية المتعارف عليها
+                "pair": f"USD / {country.currency_code}"
+            })
+
+        response_data = {
+            "title": "أسعار الصرف اليوم",
+            "description": "يتم عرض الأسعار أدناه بناءً على سعر الدولار الأمريكي (USD) مقابل عملات الدول المدعومة في المنصة.",
+            "rates": rates_data
+        }
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 @api_view(['POST'])

@@ -99,6 +99,11 @@ class ResendOTPSerializer(serializers.Serializer):
     email = serializers.EmailField(required=True)
     reason = serializers.ChoiceField(choices=['registration', 'reset_password'], default='registration')
 
+class CountryRateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Country
+        fields = ['id', 'name', 'currency_code', 'currency_name', 'rate_to_usd']
+
 class GoogleLoginSerializer(serializers.Serializer) :
     id_token = serializers.CharField()
 
