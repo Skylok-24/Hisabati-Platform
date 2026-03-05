@@ -44,9 +44,13 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'trusthandle_app.apps.TrusthandleAppConfig',
     'rest_framework',
+    "corsheaders",
+    "drf_yasg",
 ]
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",
+    "django.middleware.common.CommonMiddleware",
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -156,3 +160,5 @@ GOOGLE_CLIENT_ID=os.getenv("GOOGLE_CLIENT_ID")
 DEFAULT_FROM_EMAIL = os.getenv("EMAIL_HOST_USER")
 
 GEOIP_PATH = os.path.join(BASE_DIR, "trusthandle/geoip")
+
+CORS_ALLOW_ALL_ORIGINS = True

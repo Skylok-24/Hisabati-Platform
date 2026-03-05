@@ -7,6 +7,16 @@ from trusthandle_app.models import Announcement , Seller , Country
 
 User = get_user_model()
 
+
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "email",
+            "full_name",
+        ]
+
 class RegisterSerializer(serializers.ModelSerializer) :
 
     confirm_password = serializers.CharField(write_only=True)
@@ -25,6 +35,11 @@ class RegisterSerializer(serializers.ModelSerializer) :
     def validate_email(self,value):
         if User.objects.filter(email=value).exists() :
             raise ValidationError("Email Already Exist")
+        return value
+
+    def validate_password(self, value):
+        from django.contrib.auth.password_validation import validate_password
+        validate_password(value)
         return value
 
 # class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -54,6 +69,36 @@ class LoginSerializer(serializers.Serializer):
         data['user'] = user
         return data
 
+
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(required=True)
+    new_password = serializers.CharField(required=True)
+
+    def validate_new_password(self, value):
+        from django.contrib.auth.password_validation import validate_password
+        validate_password(value)
+        return value
+
+
+class ResetPasswordRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField(required=True)
+
+
+class ResetPasswordConfirmSerializer(serializers.Serializer):
+    email = serializers.EmailField(required=True)
+    otp = serializers.CharField(required=True)
+    new_password = serializers.CharField(required=True)
+
+    def validate_new_password(self, value):
+        from django.contrib.auth.password_validation import validate_password
+        validate_password(value)
+        return value
+
+
+class ResendOTPSerializer(serializers.Serializer):
+    email = serializers.EmailField(required=True)
+    reason = serializers.ChoiceField(choices=['registration', 'reset_password'], default='registration')
+
 class GoogleLoginSerializer(serializers.Serializer) :
     id_token = serializers.CharField()
 
@@ -69,13 +114,13 @@ class CountrySerializer(serializers.ModelSerializer):
         ]
 
 class SellerSerializer(serializers.ModelSerializer):
-    email = serializers.EmailField(source="user.email", read_only=True)
+    user = UserSerializer(read_only=True)
     country = CountrySerializer(read_only=True)
 
     class Meta:
         model = Seller
         fields = [
-            "email",
+            "user",
             "description",
             "whatsapp",
             "country",

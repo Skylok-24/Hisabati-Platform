@@ -2,7 +2,11 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework_simplejwt.tokens import RefreshToken
-from .serializers import RegisterSerializer , LoginSerializer, AnnouncementUpdateSerializer, AnnouncementCreateSerializer
+from .serializers import (
+    RegisterSerializer, LoginSerializer, AnnouncementUpdateSerializer, 
+    AnnouncementCreateSerializer, SellerSerializer, ChangePasswordSerializer,
+    ResetPasswordRequestSerializer, ResetPasswordConfirmSerializer, ResendOTPSerializer
+)
 from trusthandle_app.serializers import GoogleLoginSerializer
 from django.contrib.auth import get_user_model
 import random
@@ -17,8 +21,10 @@ from trusthandle_app.models import Announcement, Country, Seller
 from trusthandle_app.serializers import AnnouncementSerializer
 from rest_framework.generics import ListAPIView, RetrieveAPIView, RetrieveUpdateDestroyAPIView, ListCreateAPIView
 from rest_framework.permissions import IsAuthenticated , AllowAny, BasePermission
-from rest_framework.exceptions import ValidationError
+from rest_framework.decorators import api_view, permission_classes
 from .pagination import TenPerPagePagination
+from rest_framework.exceptions import NotFound, ValidationError
+
 
 ISO_TO_CURRENCY = {
     # شمال إفريقيا
@@ -82,92 +88,16 @@ class IsSellerOwner(BasePermission):
         return obj.seller == seller
 
 
-def get_client_ip(request):
-    x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
-    if x_forwarded_for:
-        ip = x_forwarded_for.split(",")[0]
-    else:
-        ip = request.META.get("REMOTE_ADDR")
-    return ip
-
-
 class CountryAnnouncementsView(ListAPIView):
     serializer_class = AnnouncementSerializer
     pagination_class = TenPerPagePagination
-    permission_classes = [AllowAny]  # أو IsAuthenticated لو أردتها للمسجلين فقط
+    permission_classes = [AllowAny]
 
     def get_queryset(self):
-        ip = get_client_ip(self.request)
-
-        # أثناء التطوير
-        if ip.startswith("10.") or ip == "127.0.0.1":
-            ip = "197.205.0.1"
-
-        redis_client = settings.REDIS_CLIENT
-        cache_key = f"geo_ip_{ip}"
-        country_iso =redis_client.get(cache_key)
-
-        if country_iso and isinstance(country_iso, bytes):
-            country_iso = country_iso.decode("utf-8")
-
-
-        if not country_iso:
-            try:
-                res = requests.get(
-                    f"https://ipapi.co/{ip}/country/",
-                    timeout=5
-                )
-                country_iso = res.text.strip().upper()
-
-                # نخزن النتيجة لمدة ساعة
-                redis_client.setex(cache_key, 3600, country_iso)
-
-            except:
-                # fallback: عرض كل الإعلانات
-                return (
-                    Announcement.objects
-                    .filter(status="active")
-                    .select_related(
-                        "seller__user",
-                        "seller__country",
-                        "category"
-                    )
-                    .order_by("-created_at")
-                )
-
-        currency_code = ISO_TO_CURRENCY.get(country_iso)
-
-        if not currency_code:
-            # fallback إذا البلد غير مدعوم
-            return (
-                Announcement.objects
-                .filter(status="active")
-                .select_related(
-                    "seller__user",
-                    "seller__country",
-                    "category"
-                )
-                .order_by("-created_at")
-            )
-
-        try:
-            country = Country.objects.get(currency_code=currency_code)
-        except Country.DoesNotExist:
-            # fallback إذا الدولة غير موجودة في DB
-            return (
-                Announcement.objects
-                .filter(status="active")
-                .select_related(
-                    "seller__user",
-                    "seller__country",
-                    "category"
-                )
-                .order_by("-created_at")
-            )
-
+        # إرجاع جميع الإعلانات المفعلة فقط مع ترتيبها من الأحدث للأقدم
         return (
             Announcement.objects
-            .filter(status="active", seller__country=country)
+            .filter(status="active")
             .select_related(
                 "seller__user",
                 "seller__country",
@@ -175,6 +105,136 @@ class CountryAnnouncementsView(ListAPIView):
             )
             .order_by("-created_at")
         )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+    serializer = ChangePasswordSerializer(data=request.data)
+    if serializer.is_valid():
+        user = request.user
+        if not user.check_password(serializer.validated_data['old_password']):
+            return Response({"old_password": ["Wrong password."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(serializer.validated_data['new_password'])
+        user.save()
+        return Response({"message": "Password updated successfully."}, status=status.HTTP_200_OK)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def reset_password_request(request):
+    serializer = ResetPasswordRequestSerializer(data=request.data)
+    if serializer.is_valid():
+        email = serializer.validated_data['email']
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            # We return success even if user doesn't exist for security reasons (email enumeration)
+            # but we only send email if user exists.
+            return Response({"message": "If an account exists with this email, an OTP has been sent."}, status=status.HTTP_200_OK)
+
+        otp_code = str(random.randint(100000, 999999))
+        hashed_otp = hashlib.sha256(otp_code.encode()).hexdigest()
+        redis_client = settings.REDIS_CLIENT
+
+        # Store OTP in redis for 10 minutes
+        redis_client.setex(f"reset_otp_{email}", 600, hashed_otp)
+
+        send_mail(
+            subject="Password Reset OTP",
+            message=f"Your OTP for password reset is: {otp_code}",
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+        )
+        return Response({"message": "If an account exists with this email, an OTP has been sent."}, status=status.HTTP_200_OK)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def reset_password_confirm(request):
+    serializer = ResetPasswordConfirmSerializer(data=request.data)
+    if serializer.is_valid():
+        email = serializer.validated_data['email']
+        otp = serializer.validated_data['otp']
+        new_password = serializer.validated_data['new_password']
+
+        redis_client = settings.REDIS_CLIENT
+        stored_otp = redis_client.get(f"reset_otp_{email}")
+
+        if not stored_otp:
+            return Response({"error": "Invalid or expired OTP"}, status=status.HTTP_400_BAD_REQUEST)
+
+        hashed_input = hashlib.sha256(otp.encode()).hexdigest()
+        import hmac
+        if not hmac.compare_digest(stored_otp, hashed_input):
+            return Response({"error": "Invalid or expired OTP"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = User.objects.get(email=email)
+            user.set_password(new_password)
+            user.save()
+            redis_client.delete(f"reset_otp_{email}")
+            return Response({"message": "Password reset successfully."}, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def resend_otp(request):
+    serializer = ResendOTPSerializer(data=request.data)
+    if serializer.is_valid():
+        email = serializer.validated_data['email']
+        reason = serializer.validated_data['reason']
+        redis_client = settings.REDIS_CLIENT
+
+        if reason == 'registration':
+            pending_user = redis_client.get(f"pending_user_{email}")
+            if not pending_user:
+                return Response({"error": "No pending registration found for this email."}, status=status.HTTP_400_BAD_REQUEST)
+
+            otp_code = str(random.randint(100000, 999999))
+            hashed_otp = hashlib.sha256(otp_code.encode()).hexdigest()
+
+            # Refresh registration data expiration as well
+            redis_client.expire(f"pending_user_{email}", 300)
+            redis_client.setex(f"otp_{email}", 300, hashed_otp)
+
+            send_mail(
+                subject="رمز التحقق (إعادة إرسال)",
+                message=f"رمز التحقق الجديد هو: {otp_code}",
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[email],
+            )
+            return Response({"message": "OTP resent successfully (Registration)."}, status=status.HTTP_200_OK)
+
+        elif reason == 'reset_password':
+            try:
+                User.objects.get(email=email)
+            except User.DoesNotExist:
+                # Security: Don't reveal if user exists, but here if they are resending reset OTP, they likely already requested it
+                return Response({"message": "If an account exists with this email, a new OTP has been sent."}, status=status.HTTP_200_OK)
+
+            otp_code = str(random.randint(100000, 999999))
+            hashed_otp = hashlib.sha256(otp_code.encode()).hexdigest()
+
+            # Reset OTP for 10 minutes
+            redis_client.setex(f"reset_otp_{email}", 600, hashed_otp)
+
+            send_mail(
+                subject="Password Reset OTP (Resend)",
+                message=f"Your new OTP for password reset is: {otp_code}",
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[email],
+            )
+            return Response({"message": "OTP resent successfully (Password Reset)."}, status=status.HTTP_200_OK)
+
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['POST'])
@@ -343,30 +403,15 @@ def google_login(request):
     })
 
 
-
-class LatestAnnouncementsView(ListAPIView):
-    serializer_class = AnnouncementSerializer
-    permission_classes = [IsAuthenticated]
-    pagination_class = TenPerPagePagination
-
-    def get_queryset(self):
-        return Announcement.objects.filter(
-            status="active"
-        ).order_by("-created_at")
-
-
 class SellerAnnouncementsListView(ListCreateAPIView):
     """
-    List all announcements created by the authenticated seller.
-    GET /api/seller/announcements/
+    GET /api/seller/announcements/ : Returns seller profile + paginated announcements.
+    POST /api/seller/announcements/ : Creates a new announcement.
     """
-    serializer_class = AnnouncementSerializer
     permission_classes = [IsAuthenticated]
     pagination_class = TenPerPagePagination
 
     def get_serializer_class(self):
-        if self.request.method == 'POST':
-            return AnnouncementCreateSerializer
         return AnnouncementSerializer
 
     def get_queryset(self):
@@ -383,6 +428,40 @@ class SellerAnnouncementsListView(ListCreateAPIView):
         except Seller.DoesNotExist:
             return Announcement.objects.none()
 
+    def list(self, request, *args, **kwargs):
+        user = self.request.user
+        try:
+            # نجلب بيانات البائع
+            seller = Seller.objects.get(user=user)
+        except Seller.DoesNotExist:
+            raise NotFound({"detail": "Seller profile not found"})
+
+        # نجلب الإعلانات الخاصة به
+        queryset = self.filter_queryset(self.get_queryset())
+
+        # نطبق الـ Pagination
+        page = self.paginate_queryset(queryset)
+
+        # تجهيز بيانات البائع باستخدام السيريالايزر الخاص به
+        seller_data = SellerSerializer(seller).data
+
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            paginated_response = self.get_paginated_response(serializer.data)
+
+            # ندمج الـ Profile مع الـ Paginated Announcements في رد واحد
+            return Response({
+                "seller_profile": seller_data,
+                "announcements_data": paginated_response.data
+            })
+
+        # في حال تم إيقاف الـ Pagination لأي سبب
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            "seller_profile": seller_data,
+            "announcements_data": serializer.data
+        })
+
     def perform_create(self, serializer):
         user = self.request.user
         try:
@@ -392,14 +471,13 @@ class SellerAnnouncementsListView(ListCreateAPIView):
 
         serializer.save(seller=seller)
 
-    def create(self, request, *args, **kwargs):
-        response = super().create(request, *args, **kwargs)
-        response.data = {
-            "message": "Announcement created successfully",
-            "data": response.data,
-        }
-        return response
-
+    # def create(self, request, *args, **kwargs):
+    #     response = super().create(request, *args, **kwargs)
+    #     response.data = {
+    #         "message": "Announcement created successfully",
+    #         "data": response.data,
+    #     }
+    #     return response
 
 class AnnouncementDetailView(RetrieveAPIView):
     """
