@@ -4,6 +4,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth import  authenticate
 from trusthandle_app.models import Announcement , Seller , Country
+from django.contrib.auth.password_validation import validate_password
 
 User = get_user_model()
 
@@ -85,14 +86,19 @@ class ResetPasswordRequestSerializer(serializers.Serializer):
 
 
 class ResetPasswordConfirmSerializer(serializers.Serializer):
-    email = serializers.EmailField(required=True)
-    otp = serializers.CharField(required=True)
-    new_password = serializers.CharField(required=True)
+    new_password = serializers.CharField(required=True, write_only=True)
+    confirm_password = serializers.CharField(required=True, write_only=True)
 
     def validate_new_password(self, value):
-        from django.contrib.auth.password_validation import validate_password
         validate_password(value)
         return value
+
+    def validate(self, attrs):
+        if attrs["new_password"] != attrs["confirm_password"]:
+            raise ValidationError({
+                "confirm_password": "Passwords do not match."
+            })
+        return attrs
 
 
 class ResendOTPSerializer(serializers.Serializer):

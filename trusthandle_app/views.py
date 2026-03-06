@@ -1,6 +1,8 @@
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.decorators import api_view
+import hashlib
+import hmac
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import (
     RegisterSerializer, LoginSerializer, AnnouncementUpdateSerializer, 
@@ -11,6 +13,7 @@ from .serializers import (
 from trusthandle_app.serializers import GoogleLoginSerializer
 from django.contrib.auth import get_user_model
 import random
+import secrets
 import json
 import hashlib
 from django.conf import settings
@@ -314,55 +317,84 @@ def reset_password_request(request):
         except User.DoesNotExist:
             # We return success even if user doesn't exist for security reasons (email enumeration)
             # but we only send email if user exists.
-            return Response({"message": "If an account exists with this email, an OTP has been sent."}, status=status.HTTP_200_OK)
+            return Response({"message": "If an account exists with this email, a reset link has been sent."}, status=status.HTTP_200_OK)
 
-        otp_code = str(random.randint(100000, 999999))
-        hashed_otp = hashlib.sha256(otp_code.encode()).hexdigest()
+        token = secrets.token_urlsafe(32)
+        hashed_token = hashlib.sha256(token.encode()).hexdigest()
         redis_client = settings.REDIS_CLIENT
 
-        # Store OTP in redis for 10 minutes
-        redis_client.setex(f"reset_otp_{email}", 600, hashed_otp)
+        # Store token in redis for 1 hour
+        redis_client.setex(f"reset_token_{email}", 3600, hashed_token)
+
+        # frontend_url should be defined in settings, but for now we'll use a placeholder or check if it exists
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
+        reset_link = f"{frontend_url}/reset-password-confirm?token={token}&email={email}"
 
         send_mail(
-            subject="Password Reset OTP",
-            message=f"Your OTP for password reset is: {otp_code}",
+            subject="Password Reset Link",
+            message=f"Click the link below to reset your password:\n{reset_link}",
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[email],
         )
-        return Response({"message": "If an account exists with this email, an OTP has been sent."}, status=status.HTTP_200_OK)
+        return Response({"message": "If an account exists with this email, a reset link has been sent."}, status=status.HTTP_200_OK)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def reset_password_confirm(request):
+
+    email = request.query_params.get("email")
+    token = request.query_params.get("token")
+
+    if not email or not token:
+        return Response(
+            {"error": "Invalid reset link"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
     serializer = ResetPasswordConfirmSerializer(data=request.data)
-    if serializer.is_valid():
-        email = serializer.validated_data['email']
-        otp = serializer.validated_data['otp']
-        new_password = serializer.validated_data['new_password']
 
-        redis_client = settings.REDIS_CLIENT
-        stored_otp = redis_client.get(f"reset_otp_{email}")
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        if not stored_otp:
-            return Response({"error": "Invalid or expired OTP"}, status=status.HTTP_400_BAD_REQUEST)
+    new_password = serializer.validated_data["new_password"]
 
-        hashed_input = hashlib.sha256(otp.encode()).hexdigest()
-        import hmac
-        if not hmac.compare_digest(stored_otp, hashed_input):
-            return Response({"error": "Invalid or expired OTP"}, status=status.HTTP_400_BAD_REQUEST)
+    redis_client = settings.REDIS_CLIENT
+    stored_token_hash = redis_client.get(f"reset_token_{email}")
 
-        try:
-            user = User.objects.get(email=email)
-            user.set_password(new_password)
-            user.save()
-            redis_client.delete(f"reset_otp_{email}")
-            return Response({"message": "Password reset successfully."}, status=status.HTTP_200_OK)
-        except User.DoesNotExist:
-            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+    if not stored_token_hash:
+        return Response(
+            {"error": "Invalid or expired reset link"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    hashed_input = hashlib.sha256(token.encode()).hexdigest()
+
+    if not hmac.compare_digest(stored_token_hash, hashed_input):
+        return Response(
+            {"error": "Invalid or expired reset link"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        user = User.objects.get(email=email)
+
+        user.set_password(new_password)
+        user.save()
+
+        redis_client.delete(f"reset_token_{email}")
+
+        return Response(
+            {"message": "Password reset successfully"},
+            status=status.HTTP_200_OK
+        )
+
+    except User.DoesNotExist:
+        return Response(
+            {"error": "User not found"},
+            status=status.HTTP_404_NOT_FOUND
+        )
 
 
 @api_view(['POST'])
@@ -398,22 +430,25 @@ def resend_otp(request):
             try:
                 User.objects.get(email=email)
             except User.DoesNotExist:
-                # Security: Don't reveal if user exists, but here if they are resending reset OTP, they likely already requested it
-                return Response({"message": "If an account exists with this email, a new OTP has been sent."}, status=status.HTTP_200_OK)
+                # Security: Don't reveal if user exists, but here if they are resending reset link, they likely already requested it
+                return Response({"message": "If an account exists with this email, a new reset link has been sent."}, status=status.HTTP_200_OK)
 
-            otp_code = str(random.randint(100000, 999999))
-            hashed_otp = hashlib.sha256(otp_code.encode()).hexdigest()
+            token = secrets.token_urlsafe(32)
+            hashed_token = hashlib.sha256(token.encode()).hexdigest()
 
-            # Reset OTP for 10 minutes
-            redis_client.setex(f"reset_otp_{email}", 600, hashed_otp)
+            # Reset token for 1 hour
+            redis_client.setex(f"reset_token_{email}", 3600, hashed_token)
+
+            frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
+            reset_link = f"{frontend_url}/reset-password-confirm?token={token}&email={email}"
 
             send_mail(
-                subject="Password Reset OTP (Resend)",
-                message=f"Your new OTP for password reset is: {otp_code}",
+                subject="Password Reset Link (Resend)",
+                message=f"Click the link below to reset your password:\n{reset_link}",
                 from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[email],
             )
-            return Response({"message": "OTP resent successfully (Password Reset)."}, status=status.HTTP_200_OK)
+            return Response({"message": "Reset link resent successfully."}, status=status.HTTP_200_OK)
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
