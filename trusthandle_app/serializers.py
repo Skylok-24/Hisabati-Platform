@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.exceptions import ValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth import  authenticate
-from trusthandle_app.models import Announcement , Seller , Country
+from trusthandle_app.models import Announcement , Seller , Country , Category
 from django.contrib.auth.password_validation import validate_password
 
 User = get_user_model()
@@ -18,30 +18,64 @@ class UserSerializer(serializers.ModelSerializer):
             "full_name",
         ]
 
-class RegisterSerializer(serializers.ModelSerializer) :
 
-    confirm_password = serializers.CharField(write_only=True)
-    class Meta :
+class RegisterSerializer(serializers.ModelSerializer):
+    whatsapp = serializers.CharField(write_only=True, required=True, max_length=20)
+
+    country = serializers.PrimaryKeyRelatedField(
+        queryset=Country.objects.all(),
+        write_only=True,
+        required=True
+    )
+
+    password = serializers.CharField(
+        write_only=True,
+        required=True,
+        style={'input_type': 'password'}
+    )
+
+    password_confirm = serializers.CharField(
+        write_only=True,
+        required=True,
+        style={'input_type': 'password'}
+    )
+
+    class Meta:
         model = User
-        fields = ['full_name','email','password','confirm_password']
-        extra_kwargs = {
-            'password': {'write_only': True, 'min_length': 8}
-        }
+        fields = ["full_name", "email", "password", "password_confirm", "whatsapp", "country"]
 
-    def validate(self, data):
-        if data['password'] != data['confirm_password']:
-            raise ValidationError({'password': 'Passwords do not match'})
-        return data
-
-    def validate_email(self,value):
-        if User.objects.filter(email=value).exists() :
-            raise ValidationError("Email Already Exist")
+    # --- التعديل هنا: التحقق من أن الواتساب غير مكرر ---
+    def validate_whatsapp(self, value):
+        if Seller.objects.filter(whatsapp=value).exists():
+            raise serializers.ValidationError("رقم الواتساب هذا مستخدم بالفعل في حساب آخر.")
         return value
+    # ---------------------------------------------------
 
-    def validate_password(self, value):
-        from django.contrib.auth.password_validation import validate_password
-        validate_password(value)
-        return value
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password_confirm']:
+            raise serializers.ValidationError({
+                "password": "password dont match."
+            })
+        return attrs
+
+    def create(self, validated_data):
+        validated_data.pop('password_confirm')
+        whatsapp = validated_data.pop('whatsapp')
+        country = validated_data.pop('country')
+
+        user = User.objects.create_user(
+            full_name=validated_data['full_name'],
+            email=validated_data.get('email', ''),
+            password=validated_data['password']
+        )
+
+        Seller.objects.create(
+            user=user,
+            whatsapp=whatsapp,
+            country=country
+        )
+
+        return user
 
 # class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 #     @classmethod
@@ -118,10 +152,16 @@ class CountrySerializer(serializers.ModelSerializer):
     class Meta:
         model = Country
         fields = [
+            "id",
             "name",
-            "currency_code",
-            "currency_name",
-            "rate_to_usd",
+        ]
+
+class CategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Category
+        fields = [
+            "id",
+            "name",
         ]
 
 class SellerSerializer(serializers.ModelSerializer):

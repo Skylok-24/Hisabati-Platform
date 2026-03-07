@@ -20,8 +20,8 @@ from django.conf import settings
 from django.core.mail import send_mail
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
-from trusthandle_app.models import Announcement, Country, Seller
-from trusthandle_app.serializers import AnnouncementSerializer
+from trusthandle_app.models import Announcement, Country, Seller , Category
+from trusthandle_app.serializers import AnnouncementSerializer , CategorySerializer , CountrySerializer
 from rest_framework.generics import ListAPIView, RetrieveAPIView, RetrieveUpdateDestroyAPIView, ListCreateAPIView
 from rest_framework.permissions import IsAuthenticated , AllowAny, BasePermission
 from rest_framework.decorators import api_view, permission_classes
@@ -30,6 +30,7 @@ from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.views import APIView
 from rest_framework.filters import SearchFilter
 from decimal import Decimal, InvalidOperation
+from django.shortcuts import get_object_or_404
 
 
 ISO_TO_CURRENCY = {
@@ -142,6 +143,33 @@ class CountryAnnouncementsView(ListAPIView):
             )
             .order_by("-created_at")
         )
+
+    def list(self, request, *args, **kwargs):
+        # 1. جلب الإعلانات وتطبيق الـ Pagination عليها زي المعتاد
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            response = self.get_paginated_response(serializer.data)
+        else:
+            serializer = self.get_serializer(queryset, many=True)
+            response = Response(serializer.data)
+
+        # 2. جلب كل الدول والأقسام وتمريرهم للسيريالايزر الخاص بيهم
+        countries = Country.objects.all()
+        categories = Category.objects.all()
+
+        countries_data = CountrySerializer(countries, many=True).data
+        categories_data = CategorySerializer(categories, many=True).data
+
+        # 3. إضافة البيانات الجديدة للـ Response
+        # الـ response.data في حالة الـ pagination تكون عبارة عن قاموس (dict)
+        if isinstance(response.data, dict):
+            response.data['countries'] = countries_data
+            response.data['categories'] = categories_data
+
+        return response
 
 
 class AnnouncementSearchView(ListAPIView):
@@ -453,21 +481,41 @@ def resend_otp(request):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-@api_view(['POST'])
-def login_view(request) :
-        serializer = LoginSerializer(data=request.data)
+class CountryListView(ListAPIView):
+    queryset = Country.objects.all().order_by('name') # ترتيب أبجدي لتسهيل البحث على المستخدم
+    serializer_class = CountrySerializer
+    permission_classes = [AllowAny] # مسموح لأي شخص (لأن المستخدم ما زال زائر)
+    pagination_class = None
 
-        if serializer.is_valid() :
-            user = serializer.validated_data['user']
-            refresh = RefreshToken.for_user(user)
-            return Response({
+@api_view(['POST'])
+def login_view(request):
+    serializer = LoginSerializer(data=request.data)
+
+    if serializer.is_valid():
+        user = serializer.validated_data['user']
+        refresh = RefreshToken.for_user(user)
+
+        data = {
             "full_name": user.full_name,
             "email": user.email,
             "role": user.role,
             "refresh_token": str(refresh),
             "access_token": str(refresh.access_token)
-            }, status=status.HTTP_200_OK)
-        return Response(serializer.errors,status=status.HTTP_401_UNAUTHORIZED)
+        }
+
+        # إضافة seller إذا كان موجود
+        if hasattr(user, 'seller'):
+            seller = user.seller
+            data["seller"] = {
+                "country": seller.country.name,
+                "country_id": seller.country.id,
+                "description": seller.description,
+                "whatsapp": seller.whatsapp
+            }
+
+        return Response(data, status=status.HTTP_200_OK)
+
+    return Response(serializer.errors, status=status.HTTP_401_UNAUTHORIZED)
 
 
 @api_view(['POST'])
@@ -475,9 +523,9 @@ def register(request):
     serializer = RegisterSerializer(data=request.data)
 
     if serializer.is_valid():
-
         data = serializer.validated_data
         email = data['email']
+        
         if User.objects.filter(email=email).exists():
             return Response(
                 {"error": "Email already registered"},
@@ -489,14 +537,16 @@ def register(request):
 
         redis_client = settings.REDIS_CLIENT
 
-        # نحفظ بيانات المستخدم مؤقتاً
+        # التعديل هنا: إضافة whatsapp و country للبيانات المحفوظة في Redis
         redis_client.setex(
             f"pending_user_{email}",
             300,
             json.dumps({
                 "full_name": data['full_name'],
                 "email": email,
-                "password": data['password']
+                "password": data['password'],
+                "whatsapp": data['whatsapp'],
+                "country": data['country'].id  # نأخذ الـ ID فقط لسهولة حفظه كـ JSON
             })
         )
 
@@ -528,7 +578,6 @@ def verify_otp(request):
     if not stored_otp or not pending_user:
         return Response({"error": "Invalid or expired OTP"}, status=400)
 
-    # حماية من brute force
     attempts_key = f"otp_attempts_{email}"
     attempts = redis_client.incr(attempts_key)
     redis_client.expire(attempts_key, 300)
@@ -547,25 +596,56 @@ def verify_otp(request):
     if User.objects.filter(email=email).exists():
         return Response({"error": "User already exists"}, status=400)
 
+    # 1. إنشاء المستخدم الأساسي
     user = User.objects.create_user(
         full_name=user_data['full_name'],
         email=user_data['email'],
         password=user_data['password']
     )
 
+    # تأكد من تعيين الدور (role) إذا كان مطلوباً
+    # user.role = user_data.get('role', 'seller')
+    # user.save()
+
+    # 2. إنشاء ملف البائع (Seller) وربطه بالمستخدم
+    # نفترض هنا أن user_data القادمة من Redis تحتوي على whatsapp و country
+    if 'whatsapp' in user_data and 'country' in user_data:
+        country_obj = get_object_or_404(Country, id=user_data['country'])
+
+        Seller.objects.create(
+            user=user,
+            whatsapp=user_data['whatsapp'],
+            country=country_obj,
+            description=user_data.get('description', '')  # في حال كان هناك وصف
+        )
+
+    # 3. تنظيف Redis
     redis_client.delete(f"otp_{email}")
     redis_client.delete(f"pending_user_{email}")
     redis_client.delete(attempts_key)
 
+    # 4. إصدار الـ Tokens
     refresh = RefreshToken.for_user(user)
 
-    return Response({
+    response_data = {
         "full_name": user.full_name,
         "email": user.email,
-        "role": user.role,
+        "role": getattr(user, 'role', 'seller'),  # تجنب الخطأ لو لم يكن حقل role موجوداً مباشرة
         "refresh_token": str(refresh),
         "access_token": str(refresh.access_token)
-    })
+    }
+
+    # إضافة seller الآن ستعمل لأننا قمنا بإنشائه في الخطوة 2
+    if hasattr(user, "seller"):
+        seller = user.seller
+        response_data["seller"] = {
+            "country_id": seller.country.id,
+            "country": seller.country.name,
+            "description": seller.description,
+            "whatsapp": seller.whatsapp
+        }
+
+    return Response(response_data)
 
 
 @api_view(['POST'])

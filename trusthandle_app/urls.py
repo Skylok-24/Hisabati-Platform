@@ -28,6 +28,7 @@ urlpatterns = [
     path('reset-password-confirm/', views.reset_password_confirm, name='reset_password_confirm'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('logout/', views.LogoutView.as_view(), name='logout'),
+    path('register_page/', views.CountryListView.as_view(), name='country-list'),
 
     # Public announcements
     path('', views.CountryAnnouncementsView.as_view()),
