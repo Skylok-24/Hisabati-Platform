@@ -148,12 +148,22 @@ class GoogleLoginSerializer(serializers.Serializer) :
     id_token = serializers.CharField()
 
 
-class CountrySerializer(serializers.ModelSerializer):
+class CountryHomeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Country
         fields = [
             "id",
             "name",
+        ]
+
+class CountrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Country
+        fields = [
+            "name",
+            "currency_code",
+            "currency_name",
+            "rate_to_usd",
         ]
 
 class CategorySerializer(serializers.ModelSerializer):

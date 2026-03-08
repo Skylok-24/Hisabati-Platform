@@ -21,7 +21,7 @@ from django.core.mail import send_mail
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 from trusthandle_app.models import Announcement, Country, Seller , Category
-from trusthandle_app.serializers import AnnouncementSerializer , CategorySerializer , CountrySerializer
+from trusthandle_app.serializers import AnnouncementSerializer , CategorySerializer , CountrySerializer , CountryHomeSerializer
 from rest_framework.generics import ListAPIView, RetrieveAPIView, RetrieveUpdateDestroyAPIView, ListCreateAPIView
 from rest_framework.permissions import IsAuthenticated , AllowAny, BasePermission
 from rest_framework.decorators import api_view, permission_classes
@@ -483,7 +483,7 @@ def resend_otp(request):
 
 class CountryListView(ListAPIView):
     queryset = Country.objects.all().order_by('name') # ترتيب أبجدي لتسهيل البحث على المستخدم
-    serializer_class = CountrySerializer
+    serializer_class = CountryHomeSerializer
     permission_classes = [AllowAny] # مسموح لأي شخص (لأن المستخدم ما زال زائر)
     pagination_class = None
 
