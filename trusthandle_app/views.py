@@ -1,7 +1,5 @@
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.decorators import api_view
-import hashlib
 import hmac
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import (
@@ -21,7 +19,7 @@ from django.core.mail import send_mail
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 from trusthandle_app.models import Announcement, Country, Seller , Category
-from trusthandle_app.serializers import AnnouncementSerializer , CategorySerializer , CountrySerializer , CountryHomeSerializer
+from trusthandle_app.serializers import AnnouncementSerializer , CategorySerializer , CountrySerializer , CountryHomeSerializer , SellerEditProfileSerializer
 from rest_framework.generics import ListAPIView, RetrieveAPIView, RetrieveUpdateDestroyAPIView, ListCreateAPIView
 from rest_framework.permissions import IsAuthenticated , AllowAny, BasePermission
 from rest_framework.decorators import api_view, permission_classes
@@ -31,6 +29,8 @@ from rest_framework.views import APIView
 from rest_framework.filters import SearchFilter
 from decimal import Decimal, InvalidOperation
 from django.shortcuts import get_object_or_404
+from django.db.models import Max
+from rest_framework.generics import UpdateAPIView
 
 
 ISO_TO_CURRENCY = {
@@ -132,7 +132,6 @@ class CountryAnnouncementsView(ListAPIView):
     permission_classes = [AllowAny]
 
     def get_queryset(self):
-        # إرجاع جميع الإعلانات المفعلة فقط مع ترتيبها من الأحدث للأقدم
         return (
             Announcement.objects
             .filter(status="active")
@@ -145,8 +144,14 @@ class CountryAnnouncementsView(ListAPIView):
         )
 
     def list(self, request, *args, **kwargs):
-        # 1. جلب الإعلانات وتطبيق الـ Pagination عليها زي المعتاد
         queryset = self.filter_queryset(self.get_queryset())
+
+        # Calculate max values from the full queryset (before pagination)
+        aggregates = queryset.aggregate(
+            max_followers=Max("followers"),
+            max_price=Max("price_usd")
+        )
+
         page = self.paginate_queryset(queryset)
 
         if page is not None:
@@ -156,18 +161,17 @@ class CountryAnnouncementsView(ListAPIView):
             serializer = self.get_serializer(queryset, many=True)
             response = Response(serializer.data)
 
-        # 2. جلب كل الدول والأقسام وتمريرهم للسيريالايزر الخاص بيهم
         countries = Country.objects.all()
         categories = Category.objects.all()
 
         countries_data = CountrySerializer(countries, many=True).data
         categories_data = CategorySerializer(categories, many=True).data
 
-        # 3. إضافة البيانات الجديدة للـ Response
-        # الـ response.data في حالة الـ pagination تكون عبارة عن قاموس (dict)
         if isinstance(response.data, dict):
             response.data['countries'] = countries_data
             response.data['categories'] = categories_data
+            response.data['max_followers'] = aggregates['max_followers'] or 0
+            response.data['max_price'] = aggregates['max_price'] or 0
 
         return response
 
@@ -767,6 +771,25 @@ class SellerAnnouncementsListView(ListCreateAPIView):
 
         serializer.save(seller=seller)
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+
+        # Re-fetch with full related data so seller + price_usd are populated
+        full_instance = Announcement.objects.select_related(
+            "seller__user",
+            "seller__country",
+            "category"
+        ).get(id=serializer.instance.id)
+
+        full_serializer = self.get_serializer(full_instance)
+
+        return Response({
+            "message": "Announcement created successfully",
+            "data": full_serializer.data
+        }, status=status.HTTP_201_CREATED)
+
     # def create(self, request, *args, **kwargs):
     #     response = super().create(request, *args, **kwargs)
     #     response.data = {
@@ -835,3 +858,33 @@ class SellerAnnouncementManageView(RetrieveUpdateDestroyAPIView):
             status=status.HTTP_200_OK,
         )
 
+
+
+class CategoriesListView(ListAPIView):
+    serializer_class = CategorySerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        return Category.objects.all()
+
+class SellerEditProfileView(UpdateAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = SellerEditProfileSerializer
+    http_method_names = ["patch"]
+
+    def get_object(self):
+        try:
+            return Seller.objects.select_related("user").get(user=self.request.user)
+        except Seller.DoesNotExist:
+            raise NotFound({"detail": "Seller profile not found"})
+
+    def update(self, request, *args, **kwargs):
+        seller = self.get_object()
+        serializer = self.get_serializer(seller, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response({
+            "message": "Profile updated successfully",
+            "data": serializer.data
+        })

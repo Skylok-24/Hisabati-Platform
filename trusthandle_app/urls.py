@@ -36,10 +36,12 @@ urlpatterns = [
     path('announcements/filter/', views.AnnouncementFilterView.as_view(), name='announcement-filter'),
     path('supported-countries/', views.CountryRateListView.as_view(), name='supported-countries-list'),
     path("announcements/<int:id>/", views.AnnouncementDetailView.as_view(), name='announcement-detail'),
+    path("create_announcement/", views.CategoriesListView.as_view(), name="categories-list"),
 
     # Seller APIs
     path("seller/announcements/", views.SellerAnnouncementsListView.as_view(), name='seller-announcements-list'),
     path("seller/announcements/<int:id>/", views.SellerAnnouncementManageView.as_view(), name='seller-announcement-detail'),
+    path("seller/edit_profile/", views.SellerEditProfileView.as_view(), name="seller-edit-profile"),
 
     # Swagger documentation
     re_path(r'^swagger/$', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),

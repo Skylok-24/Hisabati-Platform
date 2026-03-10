@@ -18,6 +18,33 @@ class UserSerializer(serializers.ModelSerializer):
             "full_name",
         ]
 
+class SellerEditProfileSerializer(serializers.ModelSerializer):
+    full_name = serializers.CharField(source="user.full_name")
+
+    class Meta:
+        model = Seller
+        fields = [
+            "full_name",
+            "description",
+            "whatsapp",
+        ]
+
+    def update(self, instance, validated_data):
+        # Extract user data separately
+        user_data = validated_data.pop("user", {})
+
+        # Update Seller fields
+        instance.description = validated_data.get("description", instance.description)
+        instance.whatsapp = validated_data.get("whatsapp", instance.whatsapp)
+        instance.save()
+
+        # Update User fields
+        if user_data:
+            instance.user.full_name = user_data.get("full_name", instance.user.full_name)
+            instance.user.save()
+
+        return instance
+
 
 class RegisterSerializer(serializers.ModelSerializer):
     whatsapp = serializers.CharField(write_only=True, required=True, max_length=20)
@@ -190,6 +217,12 @@ class SellerSerializer(serializers.ModelSerializer):
 class AnnouncementSerializer(serializers.ModelSerializer):
     seller = SellerSerializer(read_only=True)
     category = serializers.CharField(source="category.name", read_only=True)
+    category_id = serializers.PrimaryKeyRelatedField(
+        queryset=Category.objects.all(),
+        source="category",
+        write_only=True
+    )
+    price_usd = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
 
     class Meta:
         model = Announcement
@@ -205,6 +238,7 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             "created_at",
             "account_link",
             "category",
+            "category_id",
             "seller",
         ]
 
