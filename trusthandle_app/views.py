@@ -164,7 +164,7 @@ class CountryAnnouncementsView(ListAPIView):
         countries = Country.objects.all()
         categories = Category.objects.all()
 
-        countries_data = CountrySerializer(countries, many=True).data
+        countries_data = CountryHomeSerializer(countries, many=True).data
         categories_data = CategorySerializer(categories, many=True).data
 
         if isinstance(response.data, dict):
