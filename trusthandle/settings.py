@@ -173,4 +173,4 @@ DEFAULT_FROM_EMAIL = "RafeeTech <brahmialokman16@gmail.com>"
 
 EMAIL_TIMEOUT = 10
 
-BREVO_API_KEY = os.getenv("EMAIL_HOST_PASSWORD")
+BREVO_API_KEY = os.getenv("BREVO_API_KEY")
