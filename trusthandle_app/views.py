@@ -529,7 +529,7 @@ def register(request):
     if serializer.is_valid():
         data = serializer.validated_data
         email = data['email']
-        
+
         if User.objects.filter(email=email).exists():
             return Response(
                 {"error": "Email already registered"},
@@ -541,7 +541,7 @@ def register(request):
 
         redis_client = settings.REDIS_CLIENT
 
-        # التعديل هنا: إضافة whatsapp و country للبيانات المحفوظة في Redis
+        # حفظ بيانات المستخدم مؤقتاً
         redis_client.setex(
             f"pending_user_{email}",
             300,
@@ -550,19 +550,28 @@ def register(request):
                 "email": email,
                 "password": data['password'],
                 "whatsapp": data['whatsapp'],
-                "country": data['country'].id  # نأخذ الـ ID فقط لسهولة حفظه كـ JSON
+                "country": data['country'].id
             })
         )
 
-        # نحفظ OTP
+        # حفظ OTP
         redis_client.setex(f"otp_{email}", 300, hashed_otp)
 
-        send_mail(
-            subject="رمز التحقق",
-            message=f"رمز التحقق هو: {otp_code}",
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[email],
-        )
+        # إرسال البريد مع حماية من الأخطاء
+        try:
+            send_mail(
+                subject="رمز التحقق",
+                message=f"رمز التحقق هو: {otp_code}",
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[email],
+                fail_silently=False,
+            )
+        except Exception as e:
+            print("Email sending failed:", e)
+            return Response(
+                {"error": "Failed to send verification email"},
+                status=500
+            )
 
         return Response({"message": "OTP sent"}, status=201)
 

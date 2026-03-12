@@ -163,8 +163,6 @@ EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
 
 GOOGLE_CLIENT_ID=os.getenv("GOOGLE_CLIENT_ID")
 
-DEFAULT_FROM_EMAIL = os.getenv("EMAIL_HOST_USER")
-
 GEOIP_PATH = os.path.join(BASE_DIR, "trusthandle/geoip")
 
 CORS_ALLOW_ALL_ORIGINS = True
@@ -172,3 +170,5 @@ CORS_ALLOW_ALL_ORIGINS = True
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 
 DEFAULT_FROM_EMAIL = "RafeeTech <brahmialokman16@gmail.com>"
+
+EMAIL_TIMEOUT = 10
