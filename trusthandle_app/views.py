@@ -451,12 +451,7 @@ def resend_otp(request):
             redis_client.expire(f"pending_user_{email}", 300)
             redis_client.setex(f"otp_{email}", 300, hashed_otp)
 
-            send_mail(
-                subject="رمز التحقق (إعادة إرسال)",
-                message=f"رمز التحقق الجديد هو: {otp_code}",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[email],
-            )
+            send_otp_email(email, otp_code)
             return Response({"message": "OTP resent successfully (Registration)."}, status=status.HTTP_200_OK)
 
         elif reason == 'reset_password':
