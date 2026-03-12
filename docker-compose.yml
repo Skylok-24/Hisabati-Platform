@@ -9,6 +9,8 @@ services:
       POSTGRES_DB: trusthandel
       POSTGRES_USER: lokman
       POSTGRES_PASSWORD: 1234
+    ports:
+      - "5432:5432"
     
 
   redis:
