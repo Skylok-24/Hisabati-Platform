@@ -31,6 +31,7 @@ from decimal import Decimal, InvalidOperation
 from django.shortcuts import get_object_or_404
 from django.db.models import Max
 from rest_framework.generics import UpdateAPIView
+from .email_service import send_otp_email
 
 
 ISO_TO_CURRENCY = {
@@ -559,13 +560,7 @@ def register(request):
 
         # إرسال البريد مع حماية من الأخطاء
         try:
-            send_mail(
-                subject="رمز التحقق",
-                message=f"رمز التحقق هو: {otp_code}",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[email],
-                fail_silently=False,
-            )
+            send_otp_email(email, otp_code)
         except Exception as e:
             print("Email sending failed:", e)
             return Response(

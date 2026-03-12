@@ -172,3 +172,5 @@ STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 DEFAULT_FROM_EMAIL = "RafeeTech <brahmialokman16@gmail.com>"
 
 EMAIL_TIMEOUT = 10
+
+BREVO_API_KEY = os.getenv("EMAIL_HOST_PASSWORD")
